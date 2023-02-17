@@ -1,5 +1,3 @@
-from threading import Thread, Event
-import threading
 from time import sleep
 from daqhats import mcc118, OptionFlags, HatIDs, HatError
 from daqhats_utils import select_hat_device, enum_mask_to_string, \
@@ -13,7 +11,8 @@ import matplotlib.pyplot as plt
 from config import *
 import sys, tempfile, os
 from subprocess import call
-
+import numpy as np
+#from scipy.fft import fft, fftfreq
 
 
 def input_thread(a_list):
@@ -21,7 +20,8 @@ def input_thread(a_list):
 	a_list.append(True)
 
 
-def read_thread(a_list, data):
+
+def read_thread(a_list):
     address = select_hat_device(HatIDs.MCC_118)
     hat = mcc118(address)
     channel_mask = chan_list_to_mask(channels)
@@ -32,7 +32,8 @@ def read_thread(a_list, data):
     read_request_size = READ_ALL_AVAILABLE
     timeout = 5.0
     hat.a_in_scan_start(channel_mask, samples_per_channel, scan_rate, options)
-
+    data = np.empty((0,num_channels+1), float)
+    time_counter = 0
     while True:
         read_result = hat.a_in_scan_read_numpy(read_request_size, timeout)
         actual_scan_rate = hat.a_in_scan_actual_rate(num_channels, scan_rate)
@@ -50,27 +51,26 @@ def read_thread(a_list, data):
 
         if samples_read_per_channel > 0:
             index = samples_read_per_channel * num_channels - num_channels
-            new_index = 0
-            myArray = [] # create an empty array
+            myArray = np.empty((0, num_channels+1), float)
             for i in range(0, totalSamples, num_channels):
-                myArray.append([])
-                #myArray.append([])  # add a row to the array (COLUMN)
+                row = np.empty((0, num_channels), float)
+                row = np.append(row, time_counter+1.0/scan_rate)
                 for j in range(num_channels):
-                    # append a num_channels of data to the array (ROW)
-                    myArray[new_index].append(read_result.data[i + j])
-                new_index += 1
-            
-            for row in myArray:
-                data.append(row)
+                    row = np.append(row, read_result.data[i + j])
+                time_counter += 1.0/scan_rate
+                myArray = np.concatenate((myArray, [row]), axis=0)
+
+            data = np.concatenate((data, myArray), axis=0)
 
         if a_list:
             hat.a_in_scan_stop()
             hat.a_in_scan_cleanup()
+			save_data(data)
             break
-        sleep(0.1)
+            sleep(0.1)
 
-
-def save_data(data, fileDateTime):
+		
+def save_data(data):
     try:
         if os.path.exists(basepath):
             if not (os.path.exists(mypath)):
@@ -83,12 +83,11 @@ def save_data(data, fileDateTime):
         raise
 
     os.chdir(mypath)
-    csvfile = open(fileDateTime, "w+")
-    csvwriter = csv.writer(csvfile)
-    csvwriter.writerows(csv_header)
-    csvwriter.writerows(data)  # Write the array to file
-    csvfile.flush
-    csvfile.close()
+    fileDateTime = datetime.strftime(datetime.now(), "%Y_%B_%d_%H%M%S")
+    fileDateTime = mypath + "/" + fileDateTime + ".csv"
+    np.savetxt(fileDateTime, X= data, delimiter = ',', header = 't,V1,V2', comments ='')
+    print('File saved at: '+ fileDateTime + '\n')
+
 
 def plot_data():
     print('files in working dir: \n')
@@ -103,11 +102,22 @@ def plot_data():
     fig.suptitle('Sharing both axes')
     for number in selected_files:
         df = pd.read_csv(mypath + "/"+files[int(number)])
-        axs[0].plot(df['V1'], marker='x')
-        axs[1].plot(df['V2'])
+        axs[0].plot(df['t'],df['V1'], marker='x')
+        axs[1].plot(df['t'],df['V2'])
         #axs[2].plot(df['time'], df['voltage2'])
         #axs[3].plot(df['time'], df['power'])
         #axs[4].plot(df['time'], df['wire_speed'])
         for ax in axs:
             ax.label_outer()
     plt.show()
+    
+def live_fft(data, scan_rate):
+	while True:
+		N = 100
+		T = 1.0/scan_rate
+		t = np.linespace(0.0,N*T, N, endpoint=False)
+		y = data[:]
+		
+		
+	
+	
